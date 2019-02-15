@@ -6,6 +6,7 @@ import org.apache.http.util.Args;
 import sun.security.util.Length;
 
 import java.io.IOException;
+import java.io.Reader;
 import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -37,16 +38,59 @@ public class SequenceFileDemo {
 //            System.out.println(list.get(i));
 //        }
 
-        combineToSequenceFile(args);
+//        combineToSequenceFile(args);
+        extractCombineSequenceFile(args);
+
         long endTime = System.currentTimeMillis();
-        long timeSpan = endTime-startTime;
-        System.out.println("总共耗时："+timeSpan+"毫秒");
+        long timeSpan = endTime - startTime;
+        System.out.println("总共耗时：" + timeSpan + "毫秒");
     }
 
+    //将combineToSequenceFile生成的文件分解成原文件。
+    private static void extractCombineSequenceFile(String[] args) throws IOException {
+        String sourceFile = args[0];
+//        String destdir = args[1];
+        Configuration conf = new Configuration();
+        Path sourcePath = new Path(sourceFile);
+
+        SequenceFile.Reader reader = null;
+        SequenceFile.Reader.Option option1 = SequenceFile.Reader.file(sourcePath);
+
+        Writable key = null;
+        Writable value = null;
+//        Text key = null;
+//        BytesWritable value = null;
+
+        FileSystem fs = FileSystem.get(conf);
+        try {
+            reader = new SequenceFile.Reader(conf, option1);
+            key = (Writable) ReflectionUtils.newInstance(reader.getKeyClass(), conf);
+            value = (Writable) ReflectionUtils.newInstance(reader.getValueClass(), conf);
+
+            //在知道key和value的明确类型的情况下，可以直接用其类型
+//            key = ReflectionUtils.newInstance(Text.class, conf);
+//            value =  ReflectionUtils.newInstance(BytesWritable.class, conf);
+            long position = reader.getPosition();
+            while (reader.next(key, value)) {
+                FSDataOutputStream out = fs.create(new Path(key.toString()), true);
+                //文件头会多出4个字节，用来标识长度，而本例中原文件头是没有长度的，所以不能用这个方式写入流
+//                value.write(out);
+                out.write(((BytesWritable)value).getBytes(),0,((BytesWritable)value).getLength());
+
+                //                out.write(value.getBytes(),0,value.getLength());
+                System.out.printf("[%s]\t%s\t%s\n", position, key, out.getPos());
+                out.close();
+                position = reader.getPosition();
+            }
+        } finally {
+            IOUtils.closeStream(reader);
+            IOUtils.closeStream(fs);
+        }
+    }
 
     //将目标目录的所有文件以文件名为key，内容为value放入SequenceFile中
     //第一个参数是需要打包的目录，第二个参数生成的文件路径和名称
-    private static void combineToSequenceFile(String[] args) throws IOException{
+    private static void combineToSequenceFile(String[] args) throws IOException {
         String sourceDir = args[0];
         String destFile = args[1];
 
@@ -55,9 +99,8 @@ public class SequenceFileDemo {
         Configuration conf = new Configuration();
         FileSystem fs = FileSystem.get(conf);
         Path destPath = new Path(destFile);
-        if(fs.exists(destPath))
-        {
-            fs.delete(destPath,true);
+        if (fs.exists(destPath)) {
+            fs.delete(destPath, true);
         }
 
         FSDataInputStream in = null;
@@ -65,6 +108,7 @@ public class SequenceFileDemo {
         Text key = new Text();
         BytesWritable value = new BytesWritable();
 
+        byte[] buff = new byte[4096];
         SequenceFile.Writer writer = null;
 
         SequenceFile.Writer.Option option1 = SequenceFile.Writer.file(new Path(destFile));
@@ -72,24 +116,29 @@ public class SequenceFileDemo {
         SequenceFile.Writer.Option option3 = SequenceFile.Writer.valueClass(value.getClass());
         SequenceFile.Writer.Option option4 = SequenceFile.Writer.compression(SequenceFile.CompressionType.RECORD);
         try {
-            writer = SequenceFile.createWriter(conf,option1,option2,option3,option4);
-            for(int i=0;i<files.size();i++)
-            {
+            writer = SequenceFile.createWriter(conf, option1, option2, option3, option4);
+            for (int i = 0; i < files.size(); i++) {
                 Path path = new Path(files.get(i).toString());
-                System.out.println("读取文件："+path.toString());
+                System.out.println("读取文件：" + path.toString());
                 key = new Text(files.get(i).toString());
                 in = fs.open(path);
-//                只能处理小文件，int最大只能表示到1个G的大小
-                int length = (int)fs.getFileStatus(path).getLen();
-                byte[] buff = new byte[length];
-//                read最多只能读取65536的大小，这里还有bug需要修复
+//                只能处理小文件，int最大只能表示到1个G的大小，实际上大文件放入SequenceFile也没有意义
+                int length = (int) fs.getFileStatus(path).getLen();
+                byte[] bytes = new byte[length];
+//                read最多只能读取65536的大小
                 int readLength = in.read(buff);
-                System.out.println("file length:"+length+",read length:"+readLength);
-                value = new BytesWritable(buff,readLength);
-                System.out.printf("[%s]\t%s\t%s\n",writer.getLength(), key,value.getLength());
-                writer.append(key,value);
+                int offset = 0;
+                while (readLength > 0) {
+                    System.arraycopy(buff, 0, bytes, offset, readLength);
+                    offset += readLength;
+                    readLength = in.read(buff);
+                }
+                System.out.println("file length:" + length + ",read length:" + offset);
+                value = new BytesWritable(bytes);
+                System.out.printf("[%s]\t%s\t%s\n", writer.getLength(), key, value.getLength());
+                writer.append(key, value);
             }
-        }finally {
+        } finally {
             IOUtils.closeStream(in);
             IOUtils.closeStream(writer);
             IOUtils.closeStream(fs);
@@ -112,8 +161,7 @@ public class SequenceFileDemo {
                 //递归查找子目录
                 if (fileStatus.isDirectory()) {
                     filelist.addAll(getFiles(fileStatus.getPath().toString()));
-                }
-                else{
+                } else {
                     filelist.add(fileStatus.getPath().toString());
                 }
             }
@@ -123,7 +171,7 @@ public class SequenceFileDemo {
         }
     }
 
-    private static void writeSequenceFile(String[] args) throws IOException{
+    private static void writeSequenceFile(String[] args) throws IOException {
         String uri = args[0];
         Configuration conf = new Configuration();
         Path path = new Path(uri);
@@ -138,21 +186,21 @@ public class SequenceFileDemo {
         SequenceFile.Writer.Option option3 = SequenceFile.Writer.valueClass(value.getClass());
         SequenceFile.Writer.Option option4 = SequenceFile.Writer.compression(SequenceFile.CompressionType.RECORD);
         try {
-            writer = SequenceFile.createWriter(conf,option1,option2,option3,option4);
-            for (int i=0;i<100;i++){
-                key.set(i+1);
-                value.set(DATA[i% DATA.length]);
-                System.out.printf("[%s]\t%s\t%s\n",writer.getLength(), key,value);
-                writer.append(key,value);
-                if(i%DATA.length==0)
+            writer = SequenceFile.createWriter(conf, option1, option2, option3, option4);
+            for (int i = 0; i < 100; i++) {
+                key.set(i + 1);
+                value.set(DATA[i % DATA.length]);
+                System.out.printf("[%s]\t%s\t%s\n", writer.getLength(), key, value);
+                writer.append(key, value);
+                if (i % DATA.length == 0)
                     writer.sync();//写入同步点
             }
-        }finally {
+        } finally {
             IOUtils.closeStream(writer);
         }
     }
 
-    private static void readSequenceFile(String[] args) throws IOException{
+    private static void readSequenceFile(String[] args) throws IOException {
         String uri = args[0];
         Configuration conf = new Configuration();
         Path path = new Path(uri);
@@ -160,16 +208,16 @@ public class SequenceFileDemo {
         SequenceFile.Reader reader = null;
         SequenceFile.Reader.Option option1 = SequenceFile.Reader.file(path);
         try {
-            reader = new SequenceFile.Reader(conf,option1);
-            Writable key = (Writable) ReflectionUtils.newInstance(reader.getKeyClass(),conf);
-            Writable value = (Writable)ReflectionUtils.newInstance(reader.getValueClass(),conf);
+            reader = new SequenceFile.Reader(conf, option1);
+            Writable key = (Writable) ReflectionUtils.newInstance(reader.getKeyClass(), conf);
+            Writable value = (Writable) ReflectionUtils.newInstance(reader.getValueClass(), conf);
             long position = reader.getPosition();
-            while (reader.next(key,value)){
-                String syncSeen = reader.syncSeen() ? "*":"";//同步位显示为*号
-                System.out.printf("[%s%s]\t%s\t%s\n",position,syncSeen,key,value);
+            while (reader.next(key, value)) {
+                String syncSeen = reader.syncSeen() ? "*" : "";//同步位显示为*号
+                System.out.printf("[%s%s]\t%s\t%s\n", position, syncSeen, key, value);
                 position = reader.getPosition();
             }
-        }finally {
+        } finally {
             IOUtils.closeStream(reader);
         }
     }
