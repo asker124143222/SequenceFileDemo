@@ -38,8 +38,8 @@ public class SequenceFileDemo {
 //            System.out.println(list.get(i));
 //        }
 
-//        combineToSequenceFile(args);
-        extractCombineSequenceFile(args);
+        combineToSequenceFile(args);
+//        extractCombineSequenceFile(args);
 
         long endTime = System.currentTimeMillis();
         long timeSpan = endTime - startTime;
@@ -75,7 +75,7 @@ public class SequenceFileDemo {
                 FSDataOutputStream out = fs.create(new Path(key.toString()), true);
                 //文件头会多出4个字节，用来标识长度，而本例中原文件头是没有长度的，所以不能用这个方式写入流
 //                value.write(out);
-                out.write(((BytesWritable)value).getBytes(),0,((BytesWritable)value).getLength());
+                out.write(((BytesWritable) value).getBytes(), 0, ((BytesWritable) value).getLength());
 
                 //                out.write(value.getBytes(),0,value.getLength());
                 System.out.printf("[%s]\t%s\t%s\n", position, key, out.getPos());
@@ -137,6 +137,7 @@ public class SequenceFileDemo {
                 value = new BytesWritable(bytes);
                 System.out.printf("[%s]\t%s\t%s\n", writer.getLength(), key, value.getLength());
                 writer.append(key, value);
+                writer.sync();
             }
         } finally {
             IOUtils.closeStream(in);

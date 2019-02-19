@@ -9,5 +9,8 @@
         <module name="SequenceFileDemo" />
       </profile>
     </annotationProcessing>
+    <bytecodeTargetLevel>
+      <module name="SequenceFileDemo" target="1.8" />
+    </bytecodeTargetLevel>
   </component>
 </project>
